@@ -1,0 +1,79 @@
+{{- define "platform.productionHost" -}}
+{{- $label := "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?" -}}
+{{- if or (not (kindIs "string" .)) (gt (len .) 200) (not (regexMatch (printf "^(?:%s\\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$" $label) .)) (eq . "localtest.me") (hasSuffix ".localtest.me" .) (hasSuffix ".localhost" .) (hasSuffix ".local" .) -}}
+{{- fail "Production requires a lowercase public DNS name without a scheme, port or path." -}}
+{{- end -}}
+{{- end -}}
+{{- define "platform.productionImage" -}}
+{{- if or (not (kindIs "string" .)) (not (regexMatch "^([a-z0-9-]+\\.)+[a-z0-9-]+(:[0-9]+)?/[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9_][A-Za-z0-9_.-]*|@sha256:[a-f0-9]{64})$" .)) (hasSuffix ":latest" .) -}}
+{{- fail "Production custom images need an explicit registry and version tag or digest." -}}
+{{- end -}}
+{{- end -}}
+{{- define "platform.productionStorageMi" -}}
+{{- if not (and (kindIs "string" .) (regexMatch "^[1-9][0-9]{0,8}(Mi|Gi)$" .)) -}}
+{{- fail "Production storage quantities must use whole Mi or Gi units." -}}
+{{- end -}}
+{{- $number := int64 (regexFind "^[0-9]+" .) -}}
+{{- if hasSuffix "Gi" . -}}{{- mul $number 1024 -}}{{- else -}}{{- $number -}}{{- end -}}
+{{- end -}}
+{{- $production := .Values.production | default dict -}}
+{{- if $production.enabled -}}
+{{- $g := .Values.gateway -}}
+{{- $i := .Values.ingress -}}
+{{- $p := .Values.storeProvisioner -}}
+{{- if not (and $g.enabled .Values.dashboard.enabled $i.enabled .Values.networkPolicy.enabled) -}}
+{{- fail "Production requires gateway, dashboard, Ingress and NetworkPolicies." -}}
+{{- end -}}
+{{- include "platform.productionHost" $i.host -}}
+{{- include "platform.productionHost" $g.stores.baseDomain -}}
+{{- if or (ne $i.scheme "https") (ne $g.stores.scheme "https") (not $g.cookieSecure) (not $i.tls.enabled) -}}
+{{- fail "Production requires HTTPS app/store URLs, TLS and secure cookies." -}}
+{{- end -}}
+{{- if or (ne $i.className "traefik") (ne (get $i.annotations "traefik.ingress.kubernetes.io/router.entrypoints") "websecure") (ne (get $i.annotations "traefik.ingress.kubernetes.io/router.tls") "true") -}}
+{{- fail "This production profile requires Traefik TLS on the websecure entrypoint." -}}
+{{- end -}}
+{{- if or (empty $g.trustedProxyCidrs) (contains "0.0.0.0/0" $g.trustedProxyCidrs) (contains "::/0" $g.trustedProxyCidrs) -}}
+{{- fail "Configure the actual trusted ingress proxy CIDRs; trusting every source is unsafe." -}}
+{{- end -}}
+{{- if ne (int $g.port) 8000 -}}{{- fail "Store maintenance/setup requires gateway port 8000." -}}{{- end -}}
+{{- range $image := list $g.image .Values.dashboard.image .Values.notes.image $p.image -}}
+{{- include "platform.productionImage" $image -}}
+{{- end -}}
+{{- range $url := list $g.upstreams.woo $g.upstreams.analytics $g.upstreams.notes -}}
+{{- if not (has $url $g.upstreamSecurity.internalUrls) -}}
+{{- fail "Every bootstrap internal upstream needs its exact URL allowlist entry." -}}
+{{- end -}}
+{{- end -}}
+{{- if ne $g.upstreams.notes (printf "http://mcp-notes.%s.svc.cluster.local:8000/mcp" .Release.Namespace) -}}
+{{- fail "The Notes upstream must match the platform namespace (override its allowlist too)." -}}
+{{- end -}}
+{{- range $pair := list (list $g.upstreams.woo "woo-mcp") (list $g.upstreams.analytics "mcp-analytics") -}}
+{{- if ne (first $pair) (printf "http://%s.%s.svc.cluster.local:8000/mcp" (last $pair) $.Values.networkPolicy.storeNamespace) -}}
+{{- fail "Static store upstream URLs must match networkPolicy.storeNamespace." -}}
+{{- end -}}
+{{- end -}}
+{{- $profile := $p.profile -}}
+{{- if not (and $profile.production.enabled (eq $profile.storeScheme "https") $profile.ingress.tls.enabled (eq $profile.ingress.tls.secretName "") (eq $profile.ingress.className "traefik")) -}}
+{{- fail "The managed production profile needs HTTPS and controller-default wildcard TLS." -}}
+{{- end -}}
+{{- if or (ne (get $profile.ingress.annotations "traefik.ingress.kubernetes.io/router.entrypoints") "websecure") (ne (get $profile.ingress.annotations "traefik.ingress.kubernetes.io/router.tls") "true") -}}
+{{- fail "The managed production profile requires Traefik TLS on websecure." -}}
+{{- end -}}
+{{- range $image := list $profile.wooMcp.image $profile.analytics.image -}}
+{{- include "platform.productionImage" $image -}}
+{{- end -}}
+{{- if or (ne $profile.db.storageClass "local-path") (ne $profile.wordpress.storageClass "local-path") -}}
+{{- fail "Managed storage identity/cleanup currently requires k3s local-path." -}}
+{{- end -}}
+{{- $db := include "platform.productionStorageMi" $profile.db.storage | int64 -}}
+{{- $wp := include "platform.productionStorageMi" $profile.wordpress.storage | int64 -}}
+{{- $quota := include "platform.productionStorageMi" (index $profile.guardrails.quota "requests.storage") | int64 -}}
+{{- $maximum := include "platform.productionStorageMi" $profile.guardrails.volume.max.storage | int64 -}}
+{{- $minimum := include "platform.productionStorageMi" ((dig "min" "storage" "1Gi" $profile.guardrails.volume) | default "1Gi") | int64 -}}
+{{- if or (lt $quota (add $db $wp)) (gt $db $maximum) (gt $wp $maximum) (lt $db $minimum) (lt $wp $minimum) -}}
+{{- fail "Managed PVC sizes must fit both the combined storage quota and per-volume limits." -}}
+{{- end -}}
+{{- if and $p.enabled (or (hasPrefix "192.0.2." $p.apiServer.endpointCidr) (hasPrefix "198.51.100." $p.apiServer.endpointCidr) (hasPrefix "203.0.113." $p.apiServer.endpointCidr)) -}}
+{{- fail "Replace the example API endpoint with the real exact /32 address before enabling the worker." -}}
+{{- end -}}
+{{- end -}}

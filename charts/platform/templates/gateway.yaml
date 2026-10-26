@@ -1,0 +1,174 @@
+{{- $gateway := .Values.gateway | default dict }}
+{{- $stores := $gateway.stores | default dict }}
+{{- if $gateway.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-settings
+data:
+  PGHOST: {{ $gateway.databaseHost | quote }}
+  PGPORT: "5432"
+  PGDATABASE: gateway
+  PGUSER: gateway_app
+  APP_ORIGIN: {{ printf "%s://%s" (.Values.ingress.scheme | default "http") .Values.ingress.host | quote }}
+  STORE_BASE_DOMAIN: {{ ($stores.baseDomain | default "localtest.me") | quote }}
+  STORE_URL_SCHEME: {{ ($stores.scheme | default "http") | quote }}
+  COOKIE_SECURE: {{ $gateway.cookieSecure | toString | quote }}
+  TRUSTED_PROXY_CIDRS: {{ $gateway.trustedProxyCidrs | default "" | quote }}
+  LLM_MODEL: {{ $gateway.model | quote }}
+  WOO_MCP_URL: {{ $gateway.upstreams.woo | quote }}
+  ANALYTICS_MCP_URL: {{ $gateway.upstreams.analytics | quote }}
+  NOTES_MCP_URL: {{ $gateway.upstreams.notes | quote }}
+  UPSTREAM_INTERNAL_MCP_URLS: {{ $gateway.upstreamSecurity.internalUrls | toJson | quote }}
+  UPSTREAM_INTERNAL_MCP_CIDRS: {{ $gateway.upstreamSecurity.internalCidrs | quote }}
+  TOOL_CATALOG_CACHE_TTL_SECONDS: {{ $gateway.catalogCache.ttlSeconds | quote }}
+  TOOL_CATALOG_CACHE_SERVERS: {{ $gateway.catalogCache.serverSlugs | quote }}
+  TOOL_CATALOG_CACHE_MAX_ENTRIES: {{ $gateway.catalogCache.maxEntries | int | quote }}
+  TOOL_CATALOG_CACHE_MAX_BYTES: {{ $gateway.catalogCache.maxBytes | int | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+spec:
+  type: ClusterIP
+  selector:
+    app: gateway
+  ports:
+    - name: http
+      port: {{ $gateway.port }}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+spec:
+  replicas: {{ $gateway.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: gateway
+  template:
+    metadata:
+      labels:
+        app: gateway
+      annotations:
+        checksum/settings: {{ toJson (dict "gateway" $gateway "ingress" .Values.ingress) | sha256sum | quote }}
+    spec:
+      serviceAccountName: {{ printf "gateway-%s" .Release.Name | trunc 63 | trimSuffix "-" }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 90
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: migrate
+          image: {{ $gateway.image | quote }}
+          imagePullPolicy: {{ $gateway.pullPolicy }}
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef:
+                name: gateway-settings
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $gateway.databaseSecret }}
+                  key: PASSWORD
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: gateway
+          image: {{ $gateway.image | quote }}
+          imagePullPolicy: {{ $gateway.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ $gateway.port }}
+          envFrom:
+            - configMapRef:
+                name: gateway-settings
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $gateway.databaseSecret }}
+                  key: PASSWORD
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $gateway.authSecret }}
+                  key: JWT_SECRET
+            - name: FERNET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $gateway.authSecret }}
+                  key: FERNET_KEY
+            - name: BOOTSTRAP_ADMIN_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $gateway.authSecret }}
+                  key: ADMIN_EMAIL
+            - name: BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $gateway.authSecret }}
+                  key: ADMIN_PASSWORD
+            - name: GROQ_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $gateway.llmSecret }}
+                  key: GROQ_API_KEY
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml $gateway.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

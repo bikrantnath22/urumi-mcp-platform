@@ -1,0 +1,37 @@
+{{- $p := .Values.storeProvisioner | default dict -}}
+{{- $s := $p.security | default dict -}}
+{{- if hasKey $s "bindStorageRole" -}}
+{{- if not (kindIs "bool" $s.bindStorageRole) -}}
+{{- fail "storeProvisioner.security.bindStorageRole must be true or false." -}}
+{{- end -}}
+{{- end -}}
+{{- if and $s.bindStorageRole (not (and $s.enabled $s.bindNamespaceRole)) -}}
+{{- fail "Verify provisioner admission and namespace access before binding storage reads." -}}
+{{- end -}}
+{{- if $s.enabled }}
+{{- $names := include "platform.storeProvisioner.names" . | fromJson -}}
+{{- $role := printf "%s-storage" (trimSuffix "-workloads" $names.workloadRole) }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $role }}
+rules:
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [get, list]
+{{- if $s.bindStorageRole }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $role }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $role }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $names.serviceAccount }}
+    namespace: {{ .Release.Namespace | quote }}
+{{- end }}
+{{- end }}

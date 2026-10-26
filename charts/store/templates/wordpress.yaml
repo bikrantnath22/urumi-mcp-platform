@@ -1,0 +1,198 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wordpress-data
+  labels:
+    app: wordpress
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.wordpress.storageClass }}
+  storageClassName: {{ .Values.wordpress.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.wordpress.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wordpress
+  labels:
+    app: wordpress
+spec:
+  selector:
+    app: wordpress
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wordpress
+  labels:
+    app: wordpress
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: wordpress
+  template:
+    metadata:
+      {{- if .Values.wordpressSetup.enabled }}
+      annotations:
+        checksum/wordpress-setup: {{ .Files.Get "files/wordpress-setup.php" | sha256sum | quote }}
+      {{- end }}
+      labels:
+        app: wordpress
+    spec:
+      serviceAccountName: {{ printf "wordpress-%s" .Release.Name | trunc 63 | trimSuffix "-" }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 33
+        runAsGroup: 33
+        fsGroup: 33
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+        # Namespaced safe sysctl: Apache keeps port 80 without root or capabilities.
+        sysctls:
+          - name: net.ipv4.ip_unprivileged_port_start
+            value: "0"
+      containers:
+        - name: wordpress
+          image: {{ .Values.wordpress.image }}
+          ports:
+            - containerPort: 80
+          env:
+            {{- if .Values.wordpressSetup.enabled }}
+            - name: URUMI_SETUP_STORE_ID
+              value: {{ required "WordPress setup needs storeAccess.storeId." .Values.storeAccess.storeId | quote }}
+            - name: URUMI_SETUP_ENDPOINT
+              value: {{ printf "http://gateway.%s.svc.cluster.local:8000/api/store-wordpress-setup/redeem" .Values.gatewayNamespace | quote }}
+            - name: URUMI_SETUP_ADMIN_USER
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secretName }}, key: WP_ADMIN_USER }
+            - name: URUMI_STORE_NAME
+              value: {{ required "Configure storeName." .Values.storeName | quote }}
+            {{- end }}
+            - name: WORDPRESS_DB_HOST
+              value: mysql
+            - name: WORDPRESS_DB_NAME
+              value: {{ .Values.db.database | quote }}
+            - name: WORDPRESS_DB_USER
+              value: {{ .Values.db.user | quote }}
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: DB_PASSWORD
+            - name: WORDPRESS_CONFIG_EXTRA
+              value: |
+                define('WP_HOME', '{{ .Values.storeScheme }}://{{ .Values.storeHost }}');
+                define('WP_SITEURL', '{{ .Values.storeScheme }}://{{ .Values.storeHost }}');
+                define('FS_METHOD', 'direct');
+                {{- if .Values.wordpressSetup.enabled }}
+                define('WPMU_PLUGIN_DIR', '/opt/urumi/mu-plugins');
+                {{- end }}
+                if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') { $_SERVER['HTTPS'] = 'on'; }
+          startupProbe:
+            httpGet:
+              path: /wp-login.php
+              port: 80
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /wp-login.php
+              port: 80
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /wp-login.php
+              port: 80
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.wordpress.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            {{- if .Values.wordpressSetup.enabled }}
+            - name: wordpress-setup
+              mountPath: /opt/urumi/mu-plugins
+              readOnly: true
+            {{- end }}
+            - name: wordpress-data
+              mountPath: /var/www/html
+            - name: apache-run
+              mountPath: /var/run/apache2
+            - name: apache-lock
+              mountPath: /var/lock/apache2
+      volumes:
+        {{- if .Values.wordpressSetup.enabled }}
+        - name: wordpress-setup
+          configMap:
+            name: store-wordpress-setup
+            defaultMode: 0444
+        {{- end }}
+        - name: wordpress-data
+          persistentVolumeClaim:
+            claimName: wordpress-data
+        - name: apache-run
+          emptyDir: {}
+        - name: apache-lock
+          emptyDir: {}
+---
+{{- $ingress := .Values.ingress | default dict }}
+{{- $tls := $ingress.tls | default dict }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wordpress
+  {{- $annotations := deepCopy ($ingress.annotations | default dict) }}
+  {{- if .Values.storeAccess.enabled }}
+  {{- $gate := printf "%s-store-access@kubernetescrd" .Release.Namespace }}
+  {{- $key := "traefik.ingress.kubernetes.io/router.middlewares" }}
+  {{- if and (hasKey $annotations $key) (ne (get $annotations $key) $gate) }}
+  {{- fail "Ingress annotations cannot replace the managed store maintenance gate." }}
+  {{- end }}
+  {{- $_ := set $annotations $key $gate }}
+  {{- end }}
+  {{- with $annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  labels:
+    app: wordpress
+spec:
+  {{- with $ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- if $tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.storeHost | quote }}
+      {{- with $tls.secretName }}
+      secretName: {{ . | quote }}
+      {{- end }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.storeHost }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: wordpress
+                port:
+                  number: 80

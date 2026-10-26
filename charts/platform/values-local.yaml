@@ -1,0 +1,3 @@
+postgres:
+  storageClass: local-path
+  storageSize: 1Gi

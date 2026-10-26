@@ -1,0 +1,91 @@
+production:
+  enabled: false
+imagePullSecrets: []
+ingress:
+  # Empty preserves the original local Ingress class selection.
+  className: ""
+  annotations: {}
+  tls:
+    enabled: false
+    # Empty uses the controller's default certificate (managed wildcard stores).
+    secretName: ""
+
+storeHost: store.localtest.me
+secretName: store-secrets
+gatewayNamespace: platform
+
+# Enabled for worker-managed stores; the original demo stays independent.
+storeAccess:
+  enabled: false
+  storeId: ""
+
+networkPolicy:
+  enabled: true
+  ingressNamespace: kube-system
+  ingressPodLabels:
+    app.kubernetes.io/name: traefik
+  dnsNamespace: kube-system
+  dnsPodLabels:
+    k8s-app: kube-dns
+
+db:
+  image: mysql:8.4
+  database: wordpress
+  user: wordpress
+  storage: 2Gi
+  storageClass: ""        # empty = cluster default (local-path on k3s)
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: 500m, memory: 768Mi }
+
+storeName: "Urumi Co."
+wordpressSetup:
+  enabled: false
+
+storeScheme: http
+
+wordpress:
+  image: wordpress:7.1.3-php8.3-apache
+  storage: 2Gi
+  storageClass: ""
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: 1000m, memory: 768Mi }
+
+bootstrap:
+  # Managed stores use a durable Job, independent of the Helm client process.
+  managedJob: false
+  image: wordpress:cli-2.12.0-php8.3
+  woocommerceVersion: "11.2.1"
+  activeDeadlineSeconds: 1200
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: 1000m, memory: 768Mi }
+
+wooMcp:
+  image: woo-mcp:0.1.5
+  pullPolicy: IfNotPresent
+  port: 8000
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits:   { cpu: 300m, memory: 192Mi }
+
+
+analytics:
+  enabled: true
+  image: mcp-analytics:0.1.0
+  pullPolicy: IfNotPresent
+  port: 8000
+  secretName: store-secrets
+  wooBaseUrl: http://wordpress
+  wooHostHeader: ""  # Use storeHost unless explicitly overridden.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+
+guardrails:
+  enabled: false

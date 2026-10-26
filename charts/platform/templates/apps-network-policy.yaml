@@ -1,0 +1,39 @@
+{{- $gateway := .Values.gateway | default dict }}
+{{- $dashboard := .Values.dashboard | default dict }}
+{{- if or $gateway.enabled $dashboard.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: apps-from-traefik
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values:
+          {{- if $gateway.enabled }}
+          - gateway
+          {{- end }}
+          {{- if $dashboard.enabled }}
+          - dashboard
+          {{- end }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressNamespace | quote }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressPodLabels | nindent 14 }}
+      ports:
+        {{- if $gateway.enabled }}
+        - protocol: TCP
+          port: {{ $gateway.port }}
+        {{- end }}
+        {{- if $dashboard.enabled }}
+        - protocol: TCP
+          port: {{ $dashboard.port }}
+        {{- end }}
+{{- end }}

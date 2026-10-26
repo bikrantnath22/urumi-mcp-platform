@@ -1,0 +1,82 @@
+{{- $dashboard := .Values.dashboard | default dict }}
+{{- if $dashboard.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard
+spec:
+  type: ClusterIP
+  selector:
+    app: dashboard
+  ports:
+    - name: http
+      port: {{ $dashboard.port }}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: dashboard
+  template:
+    metadata:
+      labels:
+        app: dashboard
+    spec:
+      serviceAccountName: {{ printf "dashboard-%s" .Release.Name | trunc 63 | trimSuffix "-" }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: dashboard
+          image: {{ $dashboard.image | quote }}
+          imagePullPolicy: {{ $dashboard.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ $dashboard.port }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 20
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml $dashboard.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

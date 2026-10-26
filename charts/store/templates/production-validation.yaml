@@ -1,0 +1,43 @@
+{{- define "store.productionStorageMi" -}}
+{{- if not (and (kindIs "string" .) (regexMatch "^[1-9][0-9]{0,8}(Mi|Gi)$" .)) -}}
+{{- fail "Production storage quantities must use whole Mi or Gi units." -}}
+{{- end -}}
+{{- $number := int64 (regexFind "^[0-9]+" .) -}}
+{{- if hasSuffix "Gi" . -}}{{- mul $number 1024 -}}{{- else -}}{{- $number -}}{{- end -}}
+{{- end -}}
+{{- $production := .Values.production | default dict -}}
+{{- if $production.enabled -}}
+{{- $label := "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?" -}}
+{{- $host := .Values.storeHost -}}
+{{- if or (gt (len $host) 253) (not (regexMatch (printf "^(?:%s\\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$" $label) $host)) (eq $host "localtest.me") (hasSuffix ".localtest.me" $host) (hasSuffix ".localhost" $host) (hasSuffix ".local" $host) -}}
+{{- fail "Production requires a lowercase public store DNS name without a scheme, port or path." -}}
+{{- end -}}
+{{- $i := .Values.ingress -}}
+{{- if or (ne .Values.storeScheme "https") (not $i.tls.enabled) (not .Values.networkPolicy.enabled) -}}
+{{- fail "Production stores require HTTPS, TLS and NetworkPolicies." -}}
+{{- end -}}
+{{- if or (ne $i.className "traefik") (ne (get $i.annotations "traefik.ingress.kubernetes.io/router.entrypoints") "websecure") (ne (get $i.annotations "traefik.ingress.kubernetes.io/router.tls") "true") -}}
+{{- fail "This production store requires Traefik TLS on the websecure entrypoint." -}}
+{{- end -}}
+{{- range $image := list .Values.wooMcp.image .Values.analytics.image -}}
+{{- if or (not (regexMatch "^([a-z0-9-]+\\.)+[a-z0-9-]+(:[0-9]+)?/[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9_][A-Za-z0-9_.-]*|@sha256:[a-f0-9]{64})$" $image)) (hasSuffix ":latest" $image) -}}
+{{- fail "Production MCP images need an explicit registry and version tag or digest." -}}
+{{- end -}}
+{{- end -}}
+{{- $db := include "store.productionStorageMi" .Values.db.storage | int64 -}}
+{{- $wp := include "store.productionStorageMi" .Values.wordpress.storage | int64 -}}
+{{- if or (empty .Values.db.storageClass) (empty .Values.wordpress.storageClass) -}}
+{{- fail "Production store storage classes must be explicit." -}}
+{{- end -}}
+{{- if .Values.guardrails.enabled -}}
+{{- if or (ne .Values.db.storageClass "local-path") (ne .Values.wordpress.storageClass "local-path") -}}
+{{- fail "Managed storage identity/cleanup currently requires k3s local-path." -}}
+{{- end -}}
+{{- $quota := include "store.productionStorageMi" (index .Values.guardrails.quota "requests.storage") | int64 -}}
+{{- $maximum := include "store.productionStorageMi" .Values.guardrails.volume.max.storage | int64 -}}
+{{- $minimum := include "store.productionStorageMi" .Values.guardrails.volume.min.storage | int64 -}}
+{{- if or (lt $quota (add $db $wp)) (gt $db $maximum) (gt $wp $maximum) (lt $db $minimum) (lt $wp $minimum) -}}
+{{- fail "Managed PVC sizes must fit both the combined storage quota and per-volume limits." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

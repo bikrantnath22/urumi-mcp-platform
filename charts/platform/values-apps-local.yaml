@@ -1,0 +1,43 @@
+gateway:
+  enabled: true
+  image: urumi-gateway:0.1.12
+  pullPolicy: IfNotPresent
+  port: 8000
+  replicas: 1
+  databaseHost: postgres
+  databaseSecret: gateway-db-credentials
+  authSecret: gateway-auth-secrets
+  llmSecret: gateway-llm-secrets
+  model: openai/gpt-oss-20b
+  cookieSecure: false
+  # Trusted only with the existing Traefik-only gateway ingress NetworkPolicy.
+  trustedProxyCidrs: "10.42.0.0/16"
+  upstreams:
+    woo: http://woo-mcp.store.svc.cluster.local:8000/mcp
+    analytics: http://mcp-analytics.store.svc.cluster.local:8000/mcp
+    notes: http://mcp-notes.platform.svc.cluster.local:8000/mcp
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+dashboard:
+  enabled: true
+  image: urumi-dashboard:0.1.13
+  pullPolicy: IfNotPresent
+  port: 8080
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 300m
+      memory: 128Mi
+
+ingress:
+  enabled: true
+  className: traefik
+  host: app.localtest.me

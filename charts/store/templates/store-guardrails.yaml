@@ -1,0 +1,20 @@
+{{- if .Values.guardrails.enabled }}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: managed-store
+spec:
+  hard:
+    {{- toYaml .Values.guardrails.quota | nindent 4 }}
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: managed-store
+spec:
+  limits:
+    - type: Container
+      {{- toYaml .Values.guardrails.container | nindent 6 }}
+    - type: PersistentVolumeClaim
+      {{- toYaml .Values.guardrails.volume | nindent 6 }}
+{{- end }}

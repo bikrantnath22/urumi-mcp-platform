@@ -1,0 +1,16 @@
+{{- $ingress := .Values.ingress | default dict -}}
+{{- $tls := $ingress.tls | default dict -}}
+{{- $certificate := $tls.defaultCertificate | default dict -}}
+{{- if $certificate.enabled }}
+{{- if ne $ingress.className "traefik" -}}
+{{- fail "The default TLSStore requires ingress.className=traefik." -}}
+{{- end }}
+apiVersion: traefik.io/v1alpha1
+kind: TLSStore
+metadata:
+  name: default
+  namespace: {{ .Release.Namespace }}
+spec:
+  defaultCertificate:
+    secretName: {{ required "Configure the existing default certificate Secret." $certificate.secretName | quote }}
+{{- end }}

@@ -1,0 +1,157 @@
+# EXAMPLE single-node IPv4 k3s deployment; change these values for your VPS.
+# No real credentials or published images are supplied here.
+# Build/push the example 0.2.0 tags from THIS checkout (including the worker chart).
+# Replace ghcr.io/urumi-example with your public registry organization. Public
+# images avoid copying registry credentials into every managed store namespace.
+# Platform-only private pulls may use existing names in imagePullSecrets.
+#
+# DNS A records: app.urumi.example.com, store.urumi.example.com,
+# *.shops.urumi.example.com -> the VPS. Do not add an AAAA record for IPv4-only k3s.
+# Pre-create urumi-public-tls in the platform namespace with a trusted certificate
+# covering all three names above (including the wildcard), tls.crt and tls.key.
+# This dedicated Traefik installation must have NO other TLSStore named default.
+# Traefik must watch this namespace and expose its websecure entrypoint on 443.
+# HTTP redirects, if desired, belong to the controller's web -> websecure config.
+# See https://doc.traefik.io/traefik/reference/routing-configuration/kubernetes/crd/tls/tlsstore/
+#
+# Pre-create the existing application Secrets: postgres-admin (PASSWORD),
+# notes-db-credentials (PASSWORD), gateway-db-credentials (PASSWORD),
+# gateway-auth-secrets (JWT_SECRET, FERNET_KEY, ADMIN_EMAIL, ADMIN_PASSWORD),
+# gateway-llm-secrets (GROQ_API_KEY). Never put their contents into Helm values.
+# Install the static store in namespace store with charts/store/values-prod.yaml.
+#
+# Keep k3s NetworkPolicy enforcement enabled and install the Traefik CRDs and
+# admissionregistration.k8s.io/v1 ValidatingAdmissionPolicy API before enabling
+# the worker. Render/verify the admission policies first, then explicitly set
+# storeProvisioner.enabled/security.bindNamespaceRole/security.bindStorageRole.
+# The example API endpoint 192.0.2.10/32 MUST be replaced by your real node/API IP;
+# serviceCidr is the exact kubernetes Service IP, not the whole service subnet.
+production:
+  enabled: true
+imagePullSecrets: []
+
+postgres:
+  storageClass: local-path
+  storageSize: 10Gi
+  maxConnections: 60
+  sharedBuffers: 128MB
+  workMem: 2MB
+  resources:
+    requests: {cpu: 200m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+
+notes:
+  enabled: true
+  image: ghcr.io/urumi-example/mcp-notes:0.2.0
+  pullPolicy: IfNotPresent
+
+networkPolicy:
+  enabled: true
+  storeNamespace: store
+  ingressNamespace: kube-system
+  ingressPodLabels:
+    app.kubernetes.io/name: traefik
+  dnsNamespace: kube-system
+  dnsPodLabels:
+    k8s-app: kube-dns
+
+gateway:
+  enabled: true
+  image: ghcr.io/urumi-example/urumi-gateway:0.2.0
+  pullPolicy: IfNotPresent
+  port: 8000
+  replicas: 1
+  databaseHost: postgres
+  databaseSecret: gateway-db-credentials
+  authSecret: gateway-auth-secrets
+  llmSecret: gateway-llm-secrets
+  model: openai/gpt-oss-20b
+  cookieSecure: true
+  # Default k3s pod range. Restrict to the actual trusted ingress source range.
+  trustedProxyCidrs: "10.42.0.0/16"
+  stores:
+    baseDomain: shops.urumi.example.com
+    scheme: https
+  upstreams:
+    woo: http://woo-mcp.store.svc.cluster.local:8000/mcp
+    analytics: http://mcp-analytics.store.svc.cluster.local:8000/mcp
+    notes: http://mcp-notes.platform.svc.cluster.local:8000/mcp
+  upstreamSecurity:
+    internalUrls:
+      - http://woo-mcp.store.svc.cluster.local:8000/mcp
+      - http://mcp-analytics.store.svc.cluster.local:8000/mcp
+      - http://mcp-notes.platform.svc.cluster.local:8000/mcp
+    internalCidrs: "10.42.0.0/16,10.43.0.0/16"
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 768Mi}
+
+dashboard:
+  enabled: true
+  image: ghcr.io/urumi-example/urumi-dashboard:0.2.0
+  pullPolicy: IfNotPresent
+  port: 8080
+  resources:
+    requests: {cpu: 25m, memory: 32Mi}
+    limits: {cpu: 300m, memory: 128Mi}
+
+ingress:
+  enabled: true
+  className: traefik
+  host: app.urumi.example.com
+  scheme: https
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+  tls:
+    enabled: true
+    secretName: urumi-public-tls
+    defaultCertificate:
+      enabled: true
+      secretName: urumi-public-tls
+
+storeProvisioner:
+  # Enable only after admission checks and the exact API destinations are verified.
+  enabled: false
+  image: ghcr.io/urumi-example/urumi-store-provisioner:0.2.0
+  pullPolicy: IfNotPresent
+  adminEmail: owner@urumi.example.com
+  apiServer:
+    serviceCidr: 10.43.0.1/32
+    endpointCidr: 192.0.2.10/32
+    endpointPort: 6443
+  security:
+    enabled: true
+    bindNamespaceRole: false
+    bindStorageRole: false
+  profile:
+    production:
+      enabled: true
+    storeScheme: https
+    ingress:
+      className: traefik
+      annotations:
+        traefik.ingress.kubernetes.io/router.entrypoints: websecure
+        traefik.ingress.kubernetes.io/router.tls: "true"
+      tls:
+        enabled: true
+        # Uses the platform TLSStore wildcard; no TLS key in tenant namespaces.
+        secretName: ""
+    db:
+      storageClass: local-path
+      storage: 10Gi
+    wordpress:
+      storageClass: local-path
+      storage: 10Gi
+    guardrails:
+      quota:
+        requests.storage: 20Gi
+      volume:
+        max:
+          storage: 10Gi
+    wooMcp:
+      image: ghcr.io/urumi-example/woo-mcp:0.2.0
+      pullPolicy: IfNotPresent
+    analytics:
+      image: ghcr.io/urumi-example/mcp-analytics:0.2.0
+      pullPolicy: IfNotPresent

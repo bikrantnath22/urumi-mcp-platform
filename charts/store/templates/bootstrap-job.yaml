@@ -1,0 +1,120 @@
+{{- if not (kindIs "bool" .Values.bootstrap.managedJob) -}}
+{{- fail "bootstrap.managedJob must be a boolean." -}}
+{{- end -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: store-bootstrap
+  {{- if not .Values.bootstrap.managedJob }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+  {{- end }}
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: {{ .Values.bootstrap.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        app: store-bootstrap
+    spec:
+      serviceAccountName: {{ printf "store-bootstrap-%s" .Release.Name | trunc 63 | trimSuffix "-" }}
+      automountServiceAccountToken: false
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 33
+        runAsGroup: 33
+        fsGroup: 33
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bootstrap
+          image: {{ .Values.bootstrap.image }}
+          command: ["/bin/sh", "/scripts/bootstrap.sh"]
+          env:
+            - name: WOOCOMMERCE_VERSION
+              value: {{ required "Configure bootstrap.woocommerceVersion." .Values.bootstrap.woocommerceVersion | quote }}
+            - name: WORDPRESS_DB_HOST
+              value: mysql
+            - name: WORDPRESS_DB_NAME
+              value: {{ .Values.db.database | quote }}
+            - name: WORDPRESS_DB_USER
+              value: {{ .Values.db.user | quote }}
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secretName }}, key: DB_PASSWORD }
+            - name: WORDPRESS_CONFIG_EXTRA
+              value: |
+                define('WP_HOME', '{{ .Values.storeScheme }}://{{ .Values.storeHost }}');
+                define('WP_SITEURL', '{{ .Values.storeScheme }}://{{ .Values.storeHost }}');
+                define('FS_METHOD', 'direct');
+            - name: HOME
+              value: /tmp
+            - name: WP_CLI_CACHE_DIR
+              value: /tmp/wpcli-cache
+            - name: STORE_NAME
+              value: {{ required "Configure storeName." .Values.storeName | quote }}
+            - name: STORE_URL
+              value: "{{ .Values.storeScheme }}://{{ .Values.storeHost }}"
+            - name: DB_HOST
+              value: mysql
+            - name: DB_NAME
+              value: {{ .Values.db.database | quote }}
+            - name: DB_USER
+              value: {{ .Values.db.user | quote }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secretName }}, key: DB_PASSWORD }
+            - name: WP_ADMIN_USER
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secretName }}, key: WP_ADMIN_USER }
+            - name: WP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secretName }}, key: WP_ADMIN_PASSWORD }
+            - name: WP_ADMIN_EMAIL
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secretName }}, key: WP_ADMIN_EMAIL }
+            - name: WC_RW_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secretName }}, key: WC_RW_KEY }
+            - name: WC_RW_SECRET
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secretName }}, key: WC_RW_SECRET }
+            - name: WC_RO_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secretName }}, key: WC_RO_KEY }
+            - name: WC_RO_SECRET
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secretName }}, key: WC_RO_SECRET }
+            - name: WP_MEDIA_USER
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secretName }}, key: WP_MEDIA_USER }
+            - name: WP_MEDIA_APP_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secretName }}, key: WP_MEDIA_APP_PASSWORD }
+          resources:
+            {{- toYaml .Values.bootstrap.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: wordpress-data
+              mountPath: /var/www/html
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: wordpress-data
+          persistentVolumeClaim:
+            claimName: wordpress-data
+        - name: scripts
+          configMap:
+            name: store-bootstrap-scripts
+        - name: tmp
+          emptyDir: {}

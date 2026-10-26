@@ -1,0 +1,113 @@
+{{- if .Values.analytics.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-analytics
+  labels:
+    app: mcp-analytics
+spec:
+  type: ClusterIP
+  selector:
+    app: mcp-analytics
+  ports:
+    - name: http
+      port: {{ .Values.analytics.port }}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-analytics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-analytics
+  template:
+    metadata:
+      labels:
+        app: mcp-analytics
+    spec:
+      serviceAccountName: {{ printf "mcp-analytics-%s" .Release.Name | trunc 63 | trimSuffix "-" }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mcp-analytics
+          image: {{ .Values.analytics.image | quote }}
+          imagePullPolicy: {{ .Values.analytics.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.analytics.port }}
+          env:
+            - name: BIND_HOST
+              value: "0.0.0.0"
+            - name: PORT
+              value: {{ .Values.analytics.port | quote }}
+            - name: WOO_BASE_URL
+              value: {{ .Values.analytics.wooBaseUrl | quote }}
+            - name: WOO_HOST_HEADER
+              value: {{ default .Values.storeHost .Values.analytics.wooHostHeader | quote }}
+            - name: WC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.analytics.secretName }}
+                  key: WC_RO_KEY
+            - name: WC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.analytics.secretName }}
+                  key: WC_RO_SECRET
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.analytics.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: analytics-from-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app: mcp-analytics
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.gatewayNamespace | quote }}
+          podSelector:
+            matchLabels:
+              app: gateway
+      ports:
+        - protocol: TCP
+          port: {{ .Values.analytics.port }}
+{{- end }}

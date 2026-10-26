@@ -1,0 +1,23 @@
+storeProvisioner:
+  enabled: true
+  image: urumi-store-provisioner:0.1.10
+  pullPolicy: IfNotPresent
+  adminEmail: owner@example.test
+  maxJobs: 100
+  pollSeconds: 1
+  apiServer:
+    serviceCidr: 10.43.0.1/32
+    endpointCidr: 172.20.0.3/32
+    endpointPort: 6443
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 768Mi
+  profile: {}
+  security:
+    enabled: true
+    bindNamespaceRole: true
+    bindStorageRole: true

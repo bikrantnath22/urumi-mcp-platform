@@ -1,0 +1,169 @@
+{{- $p := .Values.storeProvisioner | default dict -}}
+{{- $s := $p.security | default dict -}}
+{{- if $p.enabled }}
+{{- if not (and $s.enabled $s.bindNamespaceRole $s.bindStorageRole) -}}
+{{- fail "The worker requires verified admission policies and both explicit RBAC bindings." -}}
+{{- end -}}
+{{- if not (and .Values.networkPolicy.enabled .Values.gateway.enabled) -}}
+{{- fail "The worker requires an enabled gateway and NetworkPolicies." -}}
+{{- end -}}
+{{- if not (and (kindIs "bool" .Values.networkPolicy.enabled) (kindIs "bool" .Values.gateway.enabled)) -}}
+{{- fail "Gateway and NetworkPolicy enablement must be booleans." -}}
+{{- end -}}
+{{- $api := $p.apiServer | default dict -}}
+{{- range $value := list $api.serviceCidr $api.endpointCidr -}}
+{{- if not (and (kindIs "string" $value) (regexMatch "^([0-9]{1,3}\\.){3}[0-9]{1,3}/32$" $value)) -}}
+{{- fail "Configure both API destinations as exact IPv4 /32 addresses." -}}
+{{- end -}}
+{{- range $part := splitList "." (trimSuffix "/32" $value) -}}
+{{- if gt (atoi $part) 255 -}}{{- fail "Invalid API server IPv4 address." -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $port := $api.endpointPort | toString -}}
+{{- $jobs := $p.maxJobs | toString -}}
+{{- $poll := $p.pollSeconds | toString -}}
+{{- if not (and (regexMatch "^[0-9]+$" $port) (ge (int $port) 1) (le (int $port) 65535)) -}}
+{{- fail "Invalid API endpoint port." -}}{{- end -}}
+{{- if not (and (regexMatch "^[0-9]+$" $jobs) (ge (int $jobs) 1) (le (int $jobs) 100)) -}}
+{{- fail "Worker maxJobs must be between 1 and 100." -}}{{- end -}}
+{{- if not (and (regexMatch "^[0-9]+([.][0-9]+)?$" $poll) (ge (float64 $poll) 0.05) (le (float64 $poll) 30.0)) -}}
+{{- fail "Worker polling must be between 0.05 and 30 seconds." -}}{{- end -}}
+{{- if not (and (kindIs "string" $p.adminEmail) (le (len $p.adminEmail) 254) (regexMatch "^[^[:space:]@]+@[^[:space:]@]+[.][^[:space:]@]+$" $p.adminEmail)) -}}
+{{- fail "Configure a valid store admin email." -}}{{- end -}}
+{{- if not (kindIs "map" $p.profile) -}}{{- fail "The store profile must be a map." -}}{{- end -}}
+{{- $names := include "platform.storeProvisioner.names" . | fromJson -}}
+{{- $profile := deepCopy $p.profile -}}
+{{- $_ := set $profile "provisionerRelease" .Release.Name -}}
+{{- $_ := set $profile "networkPolicy" (dict
+  "enabled" true
+  "ingressNamespace" .Values.networkPolicy.ingressNamespace
+  "ingressPodLabels" .Values.networkPolicy.ingressPodLabels
+  "dnsNamespace" .Values.networkPolicy.dnsNamespace
+  "dnsPodLabels" .Values.networkPolicy.dnsPodLabels) -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $names.serviceAccount }}-settings
+data:
+  STORE_WORKER_ENABLED: "true"
+  STORE_PLATFORM_RELEASE: {{ .Release.Name | quote }}
+  STORE_ADMIN_EMAIL: {{ $p.adminEmail | quote }}
+  STORE_WORKER_MAX_JOBS: {{ $jobs | quote }}
+  STORE_WORKER_POLL_SECONDS: {{ $poll | quote }}
+  PGHOST: postgres
+  PGPORT: "5432"
+  PGDATABASE: gateway
+  PGUSER: gateway_app
+  UPSTREAM_INTERNAL_MCP_URLS: "[]"
+  UPSTREAM_INTERNAL_MCP_CIDRS: {{ .Values.gateway.upstreamSecurity.internalCidrs | quote }}
+  store-values.yaml: |
+{{ toYaml $profile | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: store-provisioner
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: store-provisioner
+      app.kubernetes.io/instance: {{ .Release.Name | quote }}
+  template:
+    metadata:
+      labels:
+        app: store-provisioner
+        app.kubernetes.io/instance: {{ .Release.Name | quote }}
+      annotations:
+        checksum/settings: {{ toJson (list $p $profile .Values.gateway.upstreamSecurity.internalCidrs .Release.Name) | sha256sum | quote }}
+    spec:
+      serviceAccountName: {{ $names.serviceAccount }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 90
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: store-provisioner
+          image: {{ required "Configure the worker image." $p.image | quote }}
+          imagePullPolicy: {{ $p.pullPolicy }}
+          command: ["python", "-m", "app.store_worker_main"]
+          env:
+            - name: STORE_WORKER_HEALTH_PATH
+              value: /tmp/urumi-store-worker-health.json
+            {{- range $key := list "STORE_WORKER_ENABLED" "STORE_PLATFORM_RELEASE" "STORE_ADMIN_EMAIL" "STORE_WORKER_MAX_JOBS" "STORE_WORKER_POLL_SECONDS" "PGHOST" "PGPORT" "PGDATABASE" "PGUSER" "UPSTREAM_INTERNAL_MCP_URLS" "UPSTREAM_INTERNAL_MCP_CIDRS" }}
+            - name: {{ $key }}
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $names.serviceAccount }}-settings
+                  key: {{ $key }}
+            {{- end }}
+            - name: STORE_PLATFORM_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.gatewaySecret }}
+                  key: PASSWORD
+          startupProbe:
+            exec:
+              command: ["python", "-m", "app.store_worker_health", "live"]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 24
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "app.store_worker_health", "ready"]
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "app.store_worker_health", "live"]
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml $p.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: store-profile
+              mountPath: /etc/urumi
+              readOnly: true
+            - name: api-credentials
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+        - name: store-profile
+          configMap:
+            name: {{ $names.serviceAccount }}-settings
+            items:
+              - key: store-values.yaml
+                path: store-values.yaml
+        - name: api-credentials
+          projected:
+            defaultMode: 0444
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+{{- end }}

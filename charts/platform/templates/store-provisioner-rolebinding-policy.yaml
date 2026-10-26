@@ -1,0 +1,127 @@
+{{- $provisioner := .Values.storeProvisioner | default dict -}}
+{{- $security := $provisioner.security | default dict -}}
+{{- if hasKey $security "enabled" -}}
+{{- if not (kindIs "bool" $security.enabled) -}}
+{{- fail "storeProvisioner.security.enabled must be true or false." -}}
+{{- end -}}
+{{- end -}}
+{{- if $security.enabled }}
+{{- $names := include "platform.storeProvisioner.names" . | fromJson }}
+{{- $username := printf "system:serviceaccount:%s:%s" .Release.Namespace $names.serviceAccount }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $names.workloadRole }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    matchPolicy: Equivalent
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["rolebindings"]
+        scope: Namespaced
+  matchConditions:
+    - name: provisioner-identity
+      expression: {{ printf "request.userInfo.username == '%s'" $username | quote }}
+  variables:
+    - name: candidate
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: labels
+      expression: "has(variables.candidate.metadata.labels) ? variables.candidate.metadata.labels : {}"
+    - name: annotations
+      expression: "has(variables.candidate.metadata.annotations) ? variables.candidate.metadata.annotations : {}"
+    - name: namespaceLabels
+      expression: >-
+        namespaceObject != null && has(namespaceObject.metadata.labels)
+          ? namespaceObject.metadata.labels : {}
+    - name: namespaceAnnotations
+      expression: >-
+        namespaceObject != null && has(namespaceObject.metadata.annotations)
+          ? namespaceObject.metadata.annotations : {}
+    - name: requiredPodSecurity
+      expression: >-
+        {
+          'pod-security.kubernetes.io/enforce': 'restricted',
+          'pod-security.kubernetes.io/enforce-version': 'latest',
+          'pod-security.kubernetes.io/audit': 'restricted',
+          'pod-security.kubernetes.io/audit-version': 'latest',
+          'pod-security.kubernetes.io/warn': 'restricted',
+          'pod-security.kubernetes.io/warn-version': 'latest'
+        }
+  validations:
+    - expression: >-
+        request.operation == 'CREATE' &&
+        (!has(request.subResource) || request.subResource == '')
+      message: "The store provisioner may only create its fixed RoleBinding."
+      reason: Forbidden
+    - expression: >-
+        namespaceObject != null &&
+        !has(namespaceObject.metadata.deletionTimestamp) &&
+        namespaceObject.status.phase == 'Active' &&
+        namespaceObject.metadata.name == request.namespace &&
+        'urumi.ai/managed-by' in variables.namespaceLabels &&
+        variables.namespaceLabels['urumi.ai/managed-by'] == 'store-provisioner' &&
+        'urumi.ai/store-id' in variables.namespaceLabels &&
+        variables.namespaceLabels['urumi.ai/store-id'].matches('^[0-9a-f]{32}$') &&
+        variables.namespaceLabels['urumi.ai/store-id'] != '00000000000000000000000000000000' &&
+        request.namespace == 'urumi-store-' + variables.namespaceLabels['urumi.ai/store-id'] &&
+        'urumi.ai/owner-id' in variables.namespaceLabels &&
+        variables.namespaceLabels['urumi.ai/owner-id'].matches('^[1-9][0-9]{0,9}$') &&
+        int(variables.namespaceLabels['urumi.ai/owner-id']) <= 2147483647
+      message: "The target must be an active managed store namespace."
+      reason: Forbidden
+    - expression: >-
+        'urumi.ai/helm-release' in variables.namespaceAnnotations &&
+        variables.namespaceAnnotations['urumi.ai/helm-release'] == 'store' &&
+        'urumi.ai/platform-namespace' in variables.namespaceAnnotations &&
+        variables.namespaceAnnotations['urumi.ai/platform-namespace'] == {{ .Release.Namespace | quote }} &&
+        'urumi.ai/platform-release' in variables.namespaceAnnotations &&
+        variables.namespaceAnnotations['urumi.ai/platform-release'] == {{ .Release.Name | quote }}
+      message: "The target namespace must belong to this platform release."
+      reason: Forbidden
+    - expression: >-
+        variables.requiredPodSecurity.all(key,
+          key in variables.namespaceLabels &&
+          variables.namespaceLabels[key] == variables.requiredPodSecurity[key])
+      message: "The target namespace must enforce restricted Pod Security."
+      reason: Forbidden
+    - expression: >-
+        variables.candidate.metadata.name == {{ $names.roleBinding | quote }} &&
+        variables.candidate.metadata.namespace == request.namespace &&
+        variables.candidate.roleRef.apiGroup == 'rbac.authorization.k8s.io' &&
+        variables.candidate.roleRef.kind == 'ClusterRole' &&
+        variables.candidate.roleRef.name == {{ $names.workloadRole | quote }}
+      message: "Only the designated store workload role may be bound."
+      reason: Forbidden
+    - expression: >-
+        has(variables.candidate.subjects) &&
+        size(variables.candidate.subjects) == 1 &&
+        variables.candidate.subjects[0].kind == 'ServiceAccount' &&
+        variables.candidate.subjects[0].name == {{ $names.serviceAccount | quote }} &&
+        variables.candidate.subjects[0].namespace == {{ .Release.Namespace | quote }} &&
+        (!has(variables.candidate.subjects[0].apiGroup) ||
+          variables.candidate.subjects[0].apiGroup == '')
+      message: "The binding must grant access only to this platform's provisioner."
+      reason: Forbidden
+    - expression: >-
+        ['urumi.ai/managed-by', 'urumi.ai/store-id', 'urumi.ai/owner-id'].all(key,
+          key in variables.labels &&
+          key in variables.namespaceLabels &&
+          variables.labels[key] == variables.namespaceLabels[key]) &&
+        ['urumi.ai/helm-release', 'urumi.ai/platform-namespace', 'urumi.ai/platform-release'].all(key,
+          key in variables.annotations &&
+          key in variables.namespaceAnnotations &&
+          variables.annotations[key] == variables.namespaceAnnotations[key])
+      message: "The binding ownership must match its managed namespace."
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $names.workloadRole }}
+spec:
+  policyName: {{ $names.workloadRole }}
+  validationActions: [Deny]
+{{- end }}

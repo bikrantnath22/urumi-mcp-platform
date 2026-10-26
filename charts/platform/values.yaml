@@ -1,0 +1,101 @@
+# Production adds validation; local installations keep their existing defaults.
+production:
+  enabled: false
+imagePullSecrets: []
+ingress:
+  enabled: false
+  scheme: http
+  annotations: {}
+  tls:
+    enabled: false
+    secretName: ""
+    # One default TLSStore per Traefik installation; the Secret is pre-created.
+    defaultCertificate:
+      enabled: false
+      secretName: ""
+
+postgres:
+  image: postgres:17.11-bookworm
+  pullPolicy: IfNotPresent
+  adminUser: platform_admin
+  adminSecret: postgres-admin
+  notesSecret: notes-db-credentials
+  gatewaySecret: gateway-db-credentials
+  storageClass: local-path
+  storageSize: 1Gi
+  maxConnections: 30
+  sharedBuffers: 64MB
+  workMem: 2MB
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+notes:
+  enabled: true
+  image: mcp-notes:0.1.0
+  pullPolicy: IfNotPresent
+  port: 8000
+  databaseHost: postgres
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+
+networkPolicy:
+  enabled: true
+  storeNamespace: store
+  storeMcpPort: 8000
+  ingressNamespace: kube-system
+  ingressPodLabels:
+    app.kubernetes.io/name: traefik
+  dnsNamespace: kube-system
+  dnsPodLabels:
+    k8s-app: kube-dns
+
+gateway:
+  stores:
+    baseDomain: localtest.me
+    scheme: http
+  upstreamSecurity:
+    # Exact endpoint exceptions; CIDRs alone never permit arbitrary internal URLs.
+    internalUrls:
+      - http://woo-mcp.store.svc.cluster.local:8000/mcp
+      - http://mcp-analytics.store.svc.cluster.local:8000/mcp
+      - http://mcp-notes.platform.svc.cluster.local:8000/mcp
+    internalCidrs: "10.42.0.0/16,10.43.0.0/16"
+  catalogCache:
+    ttlSeconds: 60
+    serverSlugs: "woo,analytics,notes"
+    maxEntries: 32
+    maxBytes: 2097152
+
+storeProvisioner:
+  enabled: false
+  image: urumi-store-provisioner:0.1.1
+  pullPolicy: IfNotPresent
+  adminEmail: ""
+  maxJobs: 100
+  pollSeconds: 1
+  apiServer:
+    serviceCidr: ""
+    endpointCidr: ""
+    endpointPort: 6443
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 768Mi
+  profile: {}
+  security:
+    enabled: false
+    bindNamespaceRole: false
+    bindStorageRole: false

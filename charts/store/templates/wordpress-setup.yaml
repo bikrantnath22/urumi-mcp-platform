@@ -1,0 +1,36 @@
+{{- if .Values.wordpressSetup.enabled }}
+{{- if not .Values.storeAccess.enabled }}
+{{- fail "WordPress setup requires the store maintenance gate." }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: store-wordpress-setup
+  annotations:
+    urumi.ai/store-id: {{ .Values.storeAccess.storeId | quote }}
+data:
+  urumi-setup.php: |
+{{ .Files.Get "files/wordpress-setup.php" | indent 4 }}
+{{- if .Values.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wordpress-to-setup-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app: wordpress
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.gatewayNamespace | quote }}
+          podSelector:
+            matchLabels:
+              app: gateway
+      ports:
+        - {protocol: TCP, port: 8000}
+{{- end }}
+{{- end }}

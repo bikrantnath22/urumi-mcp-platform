@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: woo-mcp-from-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app: woo-mcp
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.gatewayNamespace | quote }}
+          podSelector:
+            matchLabels:
+              app: gateway
+      ports:
+        - protocol: TCP
+          port: {{ .Values.wooMcp.port }}

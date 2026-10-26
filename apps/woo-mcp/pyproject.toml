@@ -1,0 +1,9 @@
+[project]
+name = "woo-mcp"
+version = "0.1.0"
+description = "WooCommerce MCP server"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "mcp[cli]>=1.12,<2",
+]

@@ -1,0 +1,32 @@
+# Applied by the provisioner in each managed store namespace.
+guardrails:
+  enabled: true
+  quota:
+    requests.cpu: "1"
+    requests.memory: 1536Mi
+    limits.cpu: "4"
+    limits.memory: 4Gi
+    requests.storage: 4Gi
+    persistentvolumeclaims: "2"
+    pods: "8"
+    services: "6"
+    secrets: "12"
+    configmaps: "8"
+  container:
+    min:
+      cpu: 10m
+      memory: 32Mi
+    max:
+      cpu: "2"
+      memory: 1Gi
+    default:
+      cpu: 500m
+      memory: 512Mi
+    defaultRequest:
+      cpu: 100m
+      memory: 128Mi
+  volume:
+    min:
+      storage: 1Gi
+    max:
+      storage: 2Gi

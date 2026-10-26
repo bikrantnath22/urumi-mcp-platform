@@ -1,0 +1,21 @@
+{{- if not (kindIs "bool" .Values.storeAccess.enabled) -}}
+{{- fail "storeAccess.enabled must be a boolean." -}}
+{{- end -}}
+{{- if .Values.storeAccess.enabled }}
+{{- $id := .Values.storeAccess.storeId | default "" -}}
+{{- if or (not (regexMatch "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" $id)) (eq $id "00000000-0000-0000-0000-000000000000") -}}
+{{- fail "A managed store UUID is required for storeAccess." -}}
+{{- end -}}
+{{- if ne .Release.Namespace (printf "urumi-store-%s" (replace "-" "" $id)) -}}
+{{- fail "storeAccess must match the managed namespace." -}}
+{{- end -}}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: store-access
+  namespace: {{ .Release.Namespace }}
+spec:
+  forwardAuth:
+    address: {{ printf "http://gateway.%s.svc.cluster.local:8000/api/store-access/%s" .Values.gatewayNamespace $id | quote }}
+    trustForwardHeader: false
+{{- end }}

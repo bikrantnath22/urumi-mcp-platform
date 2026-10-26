@@ -1,0 +1,168 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cluster-dns
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.dnsNamespace | quote }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dnsPodLabels | nindent 14 }}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wordpress-from-ingress-and-store-apps
+spec:
+  podSelector:
+    matchLabels:
+      app: wordpress
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressNamespace | quote }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressPodLabels | nindent 14 }}
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [woo-mcp, mcp-analytics, store-bootstrap]
+      ports:
+        - {protocol: TCP, port: 80}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mysql-from-wordpress-and-bootstrap
+spec:
+  podSelector:
+    matchLabels:
+      app: mysql
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [wordpress, store-bootstrap]
+      ports:
+        - {protocol: TCP, port: 3306}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: store-mcps-to-wordpress
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [woo-mcp, mcp-analytics]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: wordpress
+      ports:
+        - {protocol: TCP, port: 80}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wordpress-and-bootstrap-to-mysql
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [wordpress, store-bootstrap]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: mysql
+      ports:
+        - {protocol: TCP, port: 3306}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bootstrap-to-wordpress
+spec:
+  podSelector:
+    matchLabels:
+      app: store-bootstrap
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: wordpress
+      ports:
+        - {protocol: TCP, port: 80}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wordpress-and-bootstrap-to-public-https
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [wordpress, store-bootstrap]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 0.0.0.0/8
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.0.0.0/24
+              - 192.0.2.0/24
+              - 192.88.99.0/24
+              - 192.168.0.0/16
+              - 198.18.0.0/15
+              - 198.51.100.0/24
+              - 203.0.113.0/24
+              - 224.0.0.0/4
+              - 240.0.0.0/4
+              - 168.63.129.16/32
+        - ipBlock:
+            cidr: 2000::/3
+            except:
+              - 2001::/23
+              - 2001:db8::/32
+              - 2002::/16
+      ports:
+        - {protocol: TCP, port: 443}
+{{- end }}

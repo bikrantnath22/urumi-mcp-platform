@@ -1,0 +1,176 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+data:
+  01-databases.sh: |
+{{ .Files.Get "files/postgres-init.sh" | indent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+      annotations:
+        checksum/init: {{ .Files.Get "files/postgres-init.sh" | sha256sum | quote }}
+    spec:
+      serviceAccountName: {{ printf "postgres-%s" .Release.Name | trunc 63 | trimSuffix "-" }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image | quote }}
+          imagePullPolicy: {{ .Values.postgres.pullPolicy }}
+          args:
+            - "-c"
+            - {{ printf "max_connections=%v" .Values.postgres.maxConnections | quote }}
+            - "-c"
+            - {{ printf "shared_buffers=%s" .Values.postgres.sharedBuffers | quote }}
+            - "-c"
+            - {{ printf "work_mem=%s" .Values.postgres.workMem | quote }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.adminUser | quote }}
+            - name: POSTGRES_DB
+              value: postgres
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.adminSecret }}
+                  key: PASSWORD
+            - name: NOTES_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.notesSecret }}
+                  key: PASSWORD
+            - name: GATEWAY_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.gatewaySecret }}
+                  key: PASSWORD
+          startupProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - 'pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d postgres'
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - 'pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d postgres'
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - 'pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d postgres'
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            - name: runtime
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: init
+          configMap:
+            name: postgres-init
+            defaultMode: 0555
+        - name: runtime
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: {{ .Values.postgres.storageClass | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.postgres.storageSize | quote }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-from-platform-apps
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - mcp-notes
+                  - gateway
+      ports:
+        - protocol: TCP
+          port: 5432

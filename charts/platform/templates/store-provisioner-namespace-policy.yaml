@@ -1,0 +1,105 @@
+{{- $provisioner := .Values.storeProvisioner | default dict -}}
+{{- $security := $provisioner.security | default dict -}}
+{{- if hasKey $security "enabled" -}}
+{{- if not (kindIs "bool" $security.enabled) -}}
+{{- fail "storeProvisioner.security.enabled must be true or false." -}}
+{{- end -}}
+{{- end -}}
+{{- if $security.enabled }}
+{{- $names := include "platform.storeProvisioner.names" . | fromJson }}
+{{- $username := printf "system:serviceaccount:%s:%s" .Release.Namespace $names.serviceAccount }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $names.namespaceRole }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    matchPolicy: Equivalent
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["namespaces", "namespaces/status", "namespaces/finalize"]
+        scope: Cluster
+  matchConditions:
+    - name: provisioner-identity
+      expression: {{ printf "request.userInfo.username == '%s'" $username | quote }}
+  variables:
+    - name: candidate
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: labels
+      expression: "has(variables.candidate.metadata.labels) ? variables.candidate.metadata.labels : {}"
+    - name: annotations
+      expression: "has(variables.candidate.metadata.annotations) ? variables.candidate.metadata.annotations : {}"
+    - name: requiredPodSecurity
+      expression: >-
+        {
+          'pod-security.kubernetes.io/enforce': 'restricted',
+          'pod-security.kubernetes.io/enforce-version': 'latest',
+          'pod-security.kubernetes.io/audit': 'restricted',
+          'pod-security.kubernetes.io/audit-version': 'latest',
+          'pod-security.kubernetes.io/warn': 'restricted',
+          'pod-security.kubernetes.io/warn-version': 'latest'
+        }
+  validations:
+    - expression: >-
+        request.operation in ['CREATE', 'DELETE'] &&
+        (!has(request.subResource) || request.subResource == '')
+      message: "The store provisioner may only create or delete namespaces."
+      reason: Forbidden
+    - expression: >-
+        'urumi.ai/managed-by' in variables.labels &&
+        variables.labels['urumi.ai/managed-by'] == 'store-provisioner' &&
+        'urumi.ai/store-id' in variables.labels &&
+        variables.labels['urumi.ai/store-id'].matches('^[0-9a-f]{32}$') &&
+        variables.labels['urumi.ai/store-id'] != '00000000000000000000000000000000' &&
+        variables.candidate.metadata.name ==
+          'urumi-store-' + variables.labels['urumi.ai/store-id']
+      message: "The namespace name and managed store identity must match."
+      reason: Forbidden
+    - expression: >-
+        'urumi.ai/owner-id' in variables.labels &&
+        variables.labels['urumi.ai/owner-id'].matches('^[1-9][0-9]{0,9}$') &&
+        int(variables.labels['urumi.ai/owner-id']) <= 2147483647
+      message: "A valid store owner ID is required."
+      reason: Forbidden
+    - expression: >-
+        'urumi.ai/helm-release' in variables.annotations &&
+        variables.annotations['urumi.ai/helm-release'] == 'store' &&
+        'urumi.ai/platform-namespace' in variables.annotations &&
+        variables.annotations['urumi.ai/platform-namespace'] == {{ .Release.Namespace | quote }} &&
+        'urumi.ai/platform-release' in variables.annotations &&
+        variables.annotations['urumi.ai/platform-release'] == {{ .Release.Name | quote }}
+      message: "The namespace must belong to this platform release."
+      reason: Forbidden
+    - expression: >-
+        variables.requiredPodSecurity.all(key,
+          key in variables.labels &&
+          variables.labels[key] == variables.requiredPodSecurity[key])
+      message: "Managed namespaces must enforce the restricted Pod Security standard."
+      reason: Forbidden
+    - expression: >-
+        request.operation != 'DELETE' ||
+        (
+          has(request.options) && request.options != null &&
+          has(request.options.preconditions) &&
+          request.options.preconditions != null &&
+          has(request.options.preconditions.uid) &&
+          request.options.preconditions.uid == oldObject.metadata.uid &&
+          has(request.options.preconditions.resourceVersion) &&
+          request.options.preconditions.resourceVersion == oldObject.metadata.resourceVersion &&
+          has(request.options.propagationPolicy) &&
+          request.options.propagationPolicy == 'Foreground'
+        )
+      message: "Deletion requires the observed namespace UID and resource version."
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $names.namespaceRole }}
+spec:
+  policyName: {{ $names.namespaceRole }}
+  validationActions: [Deny]
+{{- end }}

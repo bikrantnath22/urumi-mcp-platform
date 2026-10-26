@@ -1,0 +1,31 @@
+{{- $gateway := .Values.gateway | default dict }}
+{{- if and .Values.networkPolicy.enabled $gateway.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-to-managed-store-mcps
+spec:
+  podSelector:
+    matchLabels:
+      app: gateway
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              urumi.ai/managed-by: store-provisioner
+            matchExpressions:
+              - key: urumi.ai/store-id
+                operator: Exists
+          podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - woo-mcp
+                  - mcp-analytics
+      ports:
+        - protocol: TCP
+          port: 8000
+{{- end }}

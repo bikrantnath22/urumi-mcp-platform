@@ -1,0 +1,106 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cluster-dns
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.dnsNamespace | quote }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dnsPodLabels | nindent 14 }}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+{{- $gateway := .Values.gateway | default dict }}
+{{- if $gateway.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-to-platform-services
+spec:
+  podSelector:
+    matchLabels:
+      app: gateway
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - {protocol: TCP, port: 5432}
+    - to:
+        - podSelector:
+            matchLabels:
+              app: mcp-notes
+      ports:
+        - protocol: TCP
+          port: {{ .Values.notes.port }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.storeNamespace | quote }}
+          podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [woo-mcp, mcp-analytics]
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.storeMcpPort }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-to-public-https
+spec:
+  podSelector:
+    matchLabels:
+      app: gateway
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 0.0.0.0/8
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.0.0.0/24
+              - 192.0.2.0/24
+              - 192.88.99.0/24
+              - 192.168.0.0/16
+              - 198.18.0.0/15
+              - 198.51.100.0/24
+              - 203.0.113.0/24
+              - 224.0.0.0/4
+              - 240.0.0.0/4
+              - 168.63.129.16/32
+        - ipBlock:
+            cidr: 2000::/3
+            except:
+              - 2001::/23
+              - 2001:db8::/32
+              - 2002::/16
+      ports:
+        - {protocol: TCP, port: 443}
+{{- end }}
+{{- end }}

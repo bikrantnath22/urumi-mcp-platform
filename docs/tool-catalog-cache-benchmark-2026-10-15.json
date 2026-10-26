@@ -1,0 +1,71 @@
+{
+  "recorded_date": "2026-10-15",
+  "source": "User-supplied output from compare_discovery.py --rounds 20",
+  "environment": {
+    "cluster": "urumi",
+    "namespace": "platform",
+    "gateway_image": "urumi-gateway:0.1.4",
+    "deployment": "gateway",
+    "measurement_process": "Separate Python process inside the gateway pod; same cache implementation, isolated cache",
+    "hardware_and_load_profile": "Not captured"
+  },
+  "cold_cache_first_request_ms": 149.951,
+  "cold_cache_servers": [
+    {"server": "analytics", "elapsed_ms": 133.913, "tools": 3, "cache": "miss"},
+    {"server": "notes", "elapsed_ms": 137.226, "tools": 4, "cache": "miss"},
+    {"server": "woo", "elapsed_ms": 149.817, "tools": 12, "cache": "miss"}
+  ],
+  "pairs": [
+    {"pair": 1, "uncached_ms": 65.625, "warm_ms": 0.922},
+    {"pair": 2, "warm_ms": 0.8, "uncached_ms": 83.239},
+    {"pair": 3, "uncached_ms": 64.697, "warm_ms": 0.81},
+    {"pair": 4, "warm_ms": 0.792, "uncached_ms": 61.331},
+    {"pair": 5, "uncached_ms": 60.943, "warm_ms": 0.81},
+    {"pair": 6, "warm_ms": 1.033, "uncached_ms": 60.969},
+    {"pair": 7, "uncached_ms": 58.767, "warm_ms": 0.878},
+    {"pair": 8, "warm_ms": 0.826, "uncached_ms": 63.382},
+    {"pair": 9, "uncached_ms": 58.986, "warm_ms": 0.834},
+    {"pair": 10, "warm_ms": 0.825, "uncached_ms": 61.83},
+    {"pair": 11, "uncached_ms": 63.887, "warm_ms": 0.845},
+    {"pair": 12, "warm_ms": 0.796, "uncached_ms": 58.692},
+    {"pair": 13, "uncached_ms": 61.319, "warm_ms": 0.886},
+    {"pair": 14, "warm_ms": 0.864, "uncached_ms": 64.763},
+    {"pair": 15, "uncached_ms": 68.569, "warm_ms": 1.152},
+    {"pair": 16, "warm_ms": 1.228, "uncached_ms": 60.691},
+    {"pair": 17, "uncached_ms": 62.914, "warm_ms": 0.823},
+    {"pair": 18, "warm_ms": 1.013, "uncached_ms": 64.29},
+    {"pair": 19, "uncached_ms": 66.304, "warm_ms": 0.997},
+    {"pair": 20, "warm_ms": 0.942, "uncached_ms": 83.422}
+  ],
+  "comparison": {
+    "scope": "Project MCP discovery only; excludes Tavily, Groq, permission queries and health-status writes",
+    "cache_backend": "process_memory",
+    "ttl_seconds": 60.0,
+    "uncached": {"samples": 20, "median_ms": 63.148, "p95_ms_estimate": 83.239, "min_ms": 58.692, "max_ms": 83.422},
+    "warm_cache": {"samples": 20, "median_ms": 0.854, "p95_ms_estimate": 1.152, "min_ms": 0.792, "max_ms": 1.228},
+    "median_saved_ms": 62.294,
+    "median_reduction_percent": 98.65,
+    "warm_lookup_states": {"hit": 60},
+    "upstream_discoveries": {
+      "uncached": {"analytics": 20, "notes": 20, "woo": 20},
+      "cached": {"analytics": 1, "notes": 1, "woo": 1}
+    },
+    "per_server": {
+      "analytics": {
+        "uncached": {"samples": 20, "median_ms": 60.69, "p95_ms_estimate": 75.578, "min_ms": 52.352, "max_ms": 81.785},
+        "warm": {"samples": 20, "median_ms": 0.128, "p95_ms_estimate": 0.181, "min_ms": 0.115, "max_ms": 0.188}
+      },
+      "notes": {
+        "uncached": {"samples": 20, "median_ms": 52.719, "p95_ms_estimate": 75.317, "min_ms": 47.554, "max_ms": 76.545},
+        "warm": {"samples": 20, "median_ms": 0.117, "p95_ms_estimate": 0.18, "min_ms": 0.111, "max_ms": 0.198}
+      },
+      "woo": {
+        "uncached": {"samples": 20, "median_ms": 48.982, "p95_ms_estimate": 69.006, "min_ms": 42.54, "max_ms": 69.101},
+        "warm": {"samples": 20, "median_ms": 0.487, "p95_ms_estimate": 0.655, "min_ms": 0.474, "max_ms": 0.708}
+      }
+    }
+  },
+  "benchmark_notice": "First use, expiry and gateway restart require fresh discovery. These timings do not measure full chat latency; p95 is a small-sample estimate.",
+  
+  "summary": "Reduced median MCP tool-discovery time from 63.15 ms to 0.85 ms using in-memory TTL caching, measured across 20 comparison rounds in the local Kubernetes cluster."
+}

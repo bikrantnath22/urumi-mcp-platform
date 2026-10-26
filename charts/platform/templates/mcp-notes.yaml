@@ -1,0 +1,134 @@
+{{- if .Values.notes.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-notes
+spec:
+  type: ClusterIP
+  selector:
+    app: mcp-notes
+  ports:
+    - name: http
+      port: {{ .Values.notes.port }}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-notes
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-notes
+  template:
+    metadata:
+      labels:
+        app: mcp-notes
+    spec:
+      serviceAccountName: {{ printf "mcp-notes-%s" .Release.Name | trunc 63 | trimSuffix "-" }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mcp-notes
+          image: {{ .Values.notes.image | quote }}
+          imagePullPolicy: {{ .Values.notes.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.notes.port }}
+          env:
+            - name: BIND_HOST
+              value: "0.0.0.0"
+            - name: PORT
+              value: {{ .Values.notes.port | quote }}
+            - name: PGHOST
+              value: {{ .Values.notes.databaseHost | quote }}
+            - name: PGPORT
+              value: "5432"
+            - name: PGDATABASE
+              value: notes
+            - name: PGUSER
+              value: notes_app
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.notesSecret }}
+                  key: PASSWORD
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml .Values.notes.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: notes-from-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app: mcp-notes
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: gateway
+      ports:
+        - protocol: TCP
+          port: {{ .Values.notes.port }}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.dnsNamespace | quote }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dnsPodLabels | nindent 14 }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+{{- end }}

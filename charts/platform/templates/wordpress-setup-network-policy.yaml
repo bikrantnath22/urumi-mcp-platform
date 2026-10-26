@@ -1,0 +1,25 @@
+{{- $gateway := .Values.gateway | default dict }}
+{{- if and .Values.networkPolicy.enabled $gateway.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-from-store-wordpress
+spec:
+  podSelector:
+    matchLabels:
+      app: gateway
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              urumi.ai/managed-by: store-provisioner
+            matchExpressions:
+              - key: urumi.ai/store-id
+                operator: Exists
+          podSelector:
+            matchLabels:
+              app: wordpress
+      ports:
+        - {protocol: TCP, port: 8000}
+{{- end }}

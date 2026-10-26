@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1
+FROM debian:bookworm-slim AS helm
+ARG TARGETARCH
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+RUN set -eu; \
+    case "$TARGETARCH" in \
+      amd64) checksum=1e4ab49e429626cf6c6958d914248b78c9730803c2751b87627e171dc800e7bb ;; \
+      arm64) checksum=f14e804dfee240f55525b667488fe9adca349e63e00c9af634c0beb1421ac310 ;; \
+      *) echo "Unsupported worker architecture" >&2; exit 1 ;; \
+    esac; \
+    curl --fail --silent --show-error --location \
+      "https://get.helm.sh/helm-v3.22.0-linux-${TARGETARCH}.tar.gz" \
+      --output /tmp/helm.tar.gz; \
+    echo "${checksum}  /tmp/helm.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/helm.tar.gz -C /tmp; \
+    install -m 0555 "/tmp/linux-${TARGETARCH}/helm" /usr/local/bin/helm
+
+FROM python:3.12-slim
+COPY --from=ghcr.io/astral-sh/uv:0.13.0 /uv /usr/local/bin/uv
+COPY --from=helm /usr/local/bin/helm /usr/local/bin/helm
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    STORE_WORKER_ENABLED=false \
+    PATH="/app/.venv/bin:$PATH"
+
+WORKDIR /app
+COPY apps/gateway/pyproject.toml apps/gateway/uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+COPY apps/gateway/app ./app
+COPY charts/store /opt/urumi/charts/store
+RUN useradd --uid 10001 --user-group --create-home appuser
+USER 10001:10001
+CMD ["python", "-m", "app.store_worker_main"]

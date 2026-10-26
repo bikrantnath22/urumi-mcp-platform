@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: store-bootstrap-scripts
+data:
+  bootstrap.sh: |
+{{ .Files.Get "files/bootstrap.sh" | indent 4 }}
+  keys.php: |
+{{ .Files.Get "files/keys.php" | indent 4 }}
+  seed.sh: |
+{{ .Files.Get "files/seed.sh" | indent 4 }}
+  media.php: |
+{{ .Files.Get "files/media.php" | indent 4 }}

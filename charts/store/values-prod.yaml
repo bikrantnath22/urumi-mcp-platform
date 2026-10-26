@@ -1,0 +1,62 @@
+# EXAMPLE single-node IPv4 k3s static store; install in namespace store.
+# Use the SAME chart with this file, without values-local.yaml.
+# Replace the example domain and public registry organization before deployment.
+# Build/push the example 0.2.0 images from this checkout; these are not published.
+# Pre-create store-secrets in this namespace using the existing secret generator.
+# It supplies DB_ROOT_PASSWORD, DB_PASSWORD, WP_ADMIN_USER, WP_ADMIN_PASSWORD,
+# WP_ADMIN_EMAIL, WC_RO_KEY/SECRET, WC_RW_KEY/SECRET, WP_MEDIA_USER, WP_MEDIA_APP_PASSWORD. Do not place any credential in a values file.
+#
+# HTTPS uses Traefik's default TLSStore from the platform production chart.
+# Its existing certificate must cover store.urumi.example.com and, for managed
+# stores, *.shops.urumi.example.com. No private TLS key is copied to tenant stores.
+# k3s local-path storage is node-local; this profile does not provide HA/backups.
+# Managed-store identity/cleanup requires rancher.io/local-path with reclaim Delete.
+# For a managed render: -f values-managed.yaml -f values-prod.yaml -f <store-plan>.
+# The worker uses this same precedence: managed defaults, environment, then plan.
+production:
+  enabled: true
+imagePullSecrets: []
+storeName: Urumi
+storeHost: store.urumi.example.com
+storeScheme: https
+secretName: store-secrets
+gatewayNamespace: platform
+
+ingress:
+  className: traefik
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+  tls:
+    enabled: true
+    secretName: ""
+
+networkPolicy:
+  enabled: true
+  ingressNamespace: kube-system
+  ingressPodLabels:
+    app.kubernetes.io/name: traefik
+  dnsNamespace: kube-system
+  dnsPodLabels:
+    k8s-app: kube-dns
+
+db:
+  storageClass: local-path
+  storage: 10Gi
+wordpress:
+  storageClass: local-path
+  storage: 10Gi
+wooMcp:
+  image: ghcr.io/urumi-example/woo-mcp:0.2.0
+  pullPolicy: IfNotPresent
+analytics:
+  image: ghcr.io/urumi-example/mcp-analytics:0.2.0
+  pullPolicy: IfNotPresent
+# Applied only when the managed plan enables guardrails. All other managed limits
+# come from values-managed.yaml; the two 10Gi claims fit a 20Gi storage quota.
+guardrails:
+  quota:
+    requests.storage: 20Gi
+  volume:
+    max:
+      storage: 10Gi

@@ -1,6 +1,6 @@
 # Urumi: detailed system reference
 
-Read the [architecture and tradeoffs](system-design.md) first. This reference describes the implementation reviewed on 24 October 2026. Paths are relative to the repository root. Runtime explanations are followed by HTTP routes, database fields, tools and a complete source index. The test map records live checks and fixture tests separately.
+Read the [architecture and tradeoffs](system-design.md) first. This reference describes the implementation reviewed on 26 October 2026. Paths are relative to the repository root. Runtime explanations are followed by HTTP routes, database fields, tools and a complete source index. The test map records live checks and fixture tests separately.
 
 The index covers all 94 gateway modules, 39 dashboard source files, 55 chart files, 17 gateway tables and 17 migrations present at review time. Sections A–G describe behavior, H–J describe interfaces/data/tools, K–P locate the implementation, and Q–S cover verification, tradeoffs and chart configuration.
 
